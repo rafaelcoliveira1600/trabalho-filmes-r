@@ -1,0 +1,217 @@
+---
+title: "Trabalho Filmes R"
+author: "Rafael Oliveira"
+date: "`r Sys.Date()`"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+## Como reproduzir
+
+- **Versão do R:** 4.4.2  
+- **Pacotes utilizados:** readr, dplyr, ggplot2, tidyverse, janitor, stringr, scales  
+- **Passos para gerar o relatório:**
+  1. Abrir o ficheiro `Trabalho R.Rmd` no RStudio.  
+  2. Garantir que os ficheiros de dados (`dados_box_office.csv`, `title.basics.tsv`, `title.ratings.tsv`) estão na mesma pasta-dados trabalho r, dentro da pasta Data, dentro da pasta ADA  
+  3. Correr o código ou clicar em **Knit** → **HTML**.  
+  4. O relatório final será gerado automaticamente com os gráficos e interpretações.
+
+
+## Carregar pacotes
+```{r carregar_pacotes, message=FALSE, warning=FALSE}
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(tidyverse)
+library(janitor)
+library(stringr)
+library(scales)
+```
+## Leitura de base de dados
+```{r leitura_de_base_de_dados, message=FALSE, warning=FALSE}
+setwd("~/Desktop/ADA/Data/dados trabalho r")
+box_office<- box_office <- read_delim(
+  "dados_box_office.csv",
+  delim = ";",
+  locale = locale(encoding = "UTF-8"),
+  quote = '"',
+  trim_ws = TRUE,
+  show_col_types = FALSE
+) 
+imdb_ratings<- read_tsv("title.ratings.tsv")
+imdb_basics<- read_tsv("title.basics.tsv")
+```
+## Limpar base de dados
+```{r Limpar_base_de_daos, message=FALSE, warning=FALSE}
+#limpar IMDB basics + ratings
+dados_imdb<- imdb_basics %>%
+  filter(titleType== "movie",startYear== 2025) %>%
+  select(tconst, primaryTitle, startYear, genres,runtimeMinutes) %>%
+  inner_join(clean_names(imdb_ratings), by = "tconst") %>%
+  mutate(runtimeMinutes= suppressWarnings(as.numeric(runtimeMinutes)), title_clean= primaryTitle %>%
+           str_to_lower() %>%
+           str_squish() %>%
+           str_replace_all("[^a-z0-9 ]", "")) 
+
+#limpar box_office
+box_office<- box_office %>%
+  clean_names() %>%
+  mutate(release_group_clean = release_group %>%
+           str_to_lower() %>%
+           str_squish() %>%
+           str_replace_all("[^a-z0-9 ]", ""),
+         worldwide = readr::parse_number(worldwide),
+         domestic  = readr::parse_number(domestic), 
+         foreign   = readr::parse_number(foreign))
+```
+## Juntar base de dados
+```{r juntar_IMDB_e_box_office, message=FALSE, warning=FALSE}
+dados_finais<- dados_imdb %>%
+  inner_join(box_office, by= c("title_clean" = "release_group_clean"))
+dados_finais<- dados_finais %>%
+  select(primaryTitle,startYear,genres,runtimeMinutes,average_rating,num_votes,rank,worldwide,domestic,foreign)
+```
+
+## Glossário de Variáveis
+
+| Variável | Descrição |
+|-----------|------------|
+| `primary_title` | Título principal do filme (IMDb). |
+| `average_rating` | Rating médio dos utilizadores no IMDb (0–10). |
+| `num_votes` | Número total de votos associados ao rating. |
+| `genres` | Géneros atribuídos ao filme no IMDb. |
+| `runtime_minutes` | Duração do filme em minutos. |
+| `worldwide` | Receita mundial total (USD). |
+| `domestic` | Receita obtida no mercado doméstico (USD). |
+| `foreign` | Receita obtida fora do mercado doméstico (USD). |
+| `foreign_share` | Percentagem da receita proveniente do mercado internacional. |
+
+## Gráfico 1 — Distribuição dos géneros
+```{r grafico_generos, message=FALSE, warning=FALSE}
+
+# 1) Extrair 1.º género listado no IMDb e contar
+dist_generos <- dados_finais %>%
+  #Esta linha divide o texto em partes e guarda apenas o primeiro género   (coluna 'genero1').
+   mutate(genero1 = str_split(genres, ",", simplify = TRUE)[,1]) %>% 
+  #Remove filmes sem informação de género (valores NA ou vazios).  
+  filter(!is.na(genero1), genero1 != "") %>%
+  #Conta quantos filmes existem em cada género.
+  count(genero1, name = "n") %>%
+  #Ordena os géneros pela sua frequência (do mais comum para o menos comum).
+  arrange(desc(n)) %>%
+  #(%) que cada género representa em relação ao total de filmes.
+  mutate(pct = n / sum(n))
+
+# 2) Limitar aos top N géneros para o gráfico
+topN <- 12
+dist_generos_plot <- dist_generos %>%
+  slice_head(n = topN) %>%
+  mutate(rotulo = paste0(n, " (", percent(pct, accuracy = 0.1), ")"))
+
+# 3) Gráfico: barras horizontais com rótulos
+#x → os géneros (ordenados pela contagem 'n' em ordem crescente, para ficarem ordenados no gráfico), y → o número de filmes (n).
+g_generos <- ggplot(dist_generos_plot,
+                    aes(x = reorder(genero1, n), y = n)) +
+  #Desenha as barras (gráfico de colunas) com uma cor azul uniforme (#4C78A8).
+  geom_col(fill = "#4C78A8") +
+  #Adiciona rótulos de texto ao lado de cada barra.
+  geom_text(aes(label = rotulo), hjust = -0.05, size = 3.5) +
+  #Inverte os eixos X e Y para deixar as barras horizontais.
+  coord_flip() +
+  #Expande o limite superior do eixo Y para criar espaço acima das barras.
+  expand_limits(y = max(dist_generos_plot$n) * 1.12) +
+  #Define o título, subtítulo e rótulos dos eixos
+  labs(
+    title = "Distribuição de géneros (IMDb 2025 — filmes match com Box Office)",
+    subtitle = paste0("Top ", topN, " géneros; rótulos mostram contagem e percentagem"),
+    x = "Género (primeiro listado no IMDb)",
+    y = "N.º de filmes"
+  ) +
+  theme_minimal()
+
+g_generos
+```
+
+
+## Interpretação do 1º Gráfico
+O gráfico mostra a distribuição dos géneros dos filmes de 2025 presentes simultaneamente nas bases de dados IMDb e Box Office.
+Observa-se uma forte predominância dos géneros de ação e comédia, que representam, respetivamente, cerca de 33% e 19% de todos os filmes analisados. Estes dois géneros, em conjunto, concentram mais de metade da amostra, o que reflete a tendência comercial do cinema contemporâneo: os grandes estúdios continuam a apostar em produções com alto potencial de bilheteira e apelo internacional.
+O drama surge em terceiro lugar (15%), sugerindo que, embora ainda relevante, este género tem uma presença menor entre os títulos com grande distribuição e sucesso comercial.
+Outros géneros como terror (10%), aventura (7%) e animação (5%) aparecem em posições intermédias, indicando diversidade na oferta, mas com menor volume. Já os géneros thriller, documentário, biografia, ficção científica e romance apresentam participações residuais, abaixo de 2% cada, o que mostra uma clara concentração de mercado em torno de poucos tipos de filmes.
+Em síntese, a amostra evidencia que o mercado cinematográfico de 2025 — refletido nas duas bases — é dominado por géneros voltados ao entretenimento de massa, enquanto produções mais especializadas ou autorais permanecem em minoria.
+
+## Gráfico 2 — Duração vs. Receita mundial
+```{r grafico_duracao_receita, message=FALSE, warning=FALSE}
+
+# derivadas e filtragem
+df_g2 <- dados_finais %>%
+  mutate(
+    #Esta linha divide o texto em partes e guarda apenas o primeiro género.
+    genero1       = str_split(genres, ",", simplify = TRUE)[,1],
+    #Converte a receita mundial para escala log10.
+    receita_log   = log10(worldwide),
+    #Calcula a percentagem da receita estrangeira
+    foreign_share = ifelse(worldwide > 0, foreign / worldwide, NA_real_),
+    #Popularidade aproximada: nº de votos no IMDb em escala log10.
+    votes_log     = log10(pmax(num_votes, 1))
+  ) %>%
+  #Remove linhas com informação insuficiente para o gráfico
+  filter(!is.na(runtimeMinutes), runtimeMinutes > 0,
+         !is.na(worldwide), worldwide > 0,
+         !is.na(foreign_share), !is.na(votes_log))
+
+# gráfico
+#X → duração do filme (em minutos),Y → receita mundial (em escala log10)
+g2 <- ggplot(df_g2, aes(x = runtimeMinutes, y = receita_log)) +
+ #Desenha os pontos (cada ponto = um filme).
+  #color → intensidade da quota estrangeira na receita (0% a 100%).
+  #size → número de votos no IMDb (escala log10, mostra popularidade).
+  #alpha = 0.6 dá transparência para evitar sobreposição excessiva.
+  geom_point(aes(color = foreign_share, size = votes_log), alpha = 0.6) +
+  #Mostra a tendência geral entre duração e receita.
+  geom_smooth(method = "loess", se = FALSE, color = "grey35") +
+  #Cria uma escala contínua de cor para a variável foreign_share.
+  scale_color_gradient(name = "Quota estrangeiro",
+                       labels = percent, limits = c(0,1), oob = squish) +
+  #A legenda mostrará “Votos (log10)” para indicar que o tamanho reflete popularidade.
+  scale_size_continuous(name = "Votos (log10)") +
+  #Define título, subtítulo e rótulos dos eixos.
+  labs(
+    title = "Duração do filme vs. Receita mundial (log10)",
+    subtitle = "Cor = percentagem da receita fora do mercado doméstico; tamanho = nº de votos (log10)",
+    x = "Duração (min)",
+    y = "Receita mundial (log10 USD)"
+  ) +
+  theme_minimal() +
+  #Move todas as legendas para a parte inferior do gráfico
+  theme(legend.position = "bottom")
+
+g2
+```
+
+
+## Interpretação do 2º Gráfico
+O gráfico apresenta a relação entre a duração dos filmes e a receita mundial (em escala logarítmica), considerando também duas dimensões adicionais: o tamanho dos pontos, que representa o número de votos no IMDb (popularidade online); e a cor, que indica a percentagem da receita proveniente do mercado internacional.
+De forma geral, observa-se que não existe uma relação linear forte entre a duração do filme e a sua receita mundial. A linha de tendência é praticamente horizontal, com apenas uma ligeira subida até cerca dos 120 minutos, sugerindo que filmes um pouco mais longos podem ter uma bilheteira ligeiramente superior, mas sem evidência clara de que a duração por si só determine o sucesso financeiro.
+No entanto, outros padrões são visíveis:
+Pontos maiores (mais votos) concentram-se nas zonas de maior receita, o que indica que filmes mais populares junto do público tendem também a ser mais rentáveis.
+A cor azul média (quota estrangeira nos cerca de 50% ou mais) é comum entre os títulos de maior receita, evidenciando que o mercado internacional é determinante para o sucesso comercial global-muitos filmes dependem fortemente das bilheteiras fora do país de origem.
+A dispersão é ampla: há filmes curtos e longos com receitas modestas, e alguns outliers com receitas muito altas, confirmando que o sucesso financeiro resulta de múltiplos fatores (franquia, marketing, elenco, lançamento global), não apenas da duração.
+Para concluir, o gráfico mostra que o desempenho de bilheteira não depende diretamente da duração do filme, mas está fortemente associado à popularidade e à distribuição internacional.
+
+## Divulgação de IA e fontes
+
+Este relatório contou com o apoio do ChatGPT (OpenAI) para:
+- Explicação de código.
+- Elaboração dos comentários dos gráficos.
+- Estruturação do documento `.Rmd`.
+
+**Prompts principais:**  
+- “Explica passo a passo este código.”  
+- “Cria uma interpretação para este gráfico.”  
+- “Como posso colocar isto em chunks no R Markdown?”
+
+As bases de dados foram retiradas dos segunites sites:
+https://datasets.imdbws.com/
+https://www.boxofficemojo.com/year/world/?sort=rank&sortDir=asc&ref_=bo_ydw__resort#table
